@@ -307,7 +307,7 @@ impl Job {
                     async_smtp::smtp::error::Error::Transient(_) => {
                         // We got a transient 4xx response from SMTP server.
                         // Give some time until the server-side error maybe goes away.
-                        
+
                         // But let's first check if we didn't retry this job already
                         // too often.
                         let actually_permanent = self.tries >= JOB_RETRIES - 1;
@@ -328,8 +328,10 @@ impl Job {
                                     "couldn't load chat_id to inform user about SMTP error: {}", e
                                 ),
                             };
-                            Status::Finished(Err(format_err!("SMTP Transient error failed too often: {}", err)))
-
+                            Status::Finished(Err(format_err!(
+                                "SMTP Transient error failed too often: {}",
+                                err
+                            )))
                         } else {
                             Status::RetryLater
                         }
