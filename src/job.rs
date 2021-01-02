@@ -307,7 +307,32 @@ impl Job {
                     async_smtp::smtp::error::Error::Transient(_) => {
                         // We got a transient 4xx response from SMTP server.
                         // Give some time until the server-side error maybe goes away.
-                        Status::RetryLater
+                        
+                        // But let's first check if we didn't retry this job already
+                        // too often.
+                        let actually_permanent = self.tries >= JOB_RETRIES - 1;
+                        if actually_permanent {
+                            // Okay we tried it already quite often. Next time we would schedule
+                            // this job in three weeks, that doesn't make sense. Therefore
+                            // render this message as failed and stop trying.
+                            info!(context, "Smtp-job #{} failed for the {} time. Mark sending the message as failed.", self.job_id, self.tries);
+                            let msg_id = MsgId::new(self.foreign_id);
+                            message::set_msg_failed(context, msg_id, Some(err.to_string())).await;
+                            match Message::load_from_db(context, msg_id).await {
+                                Ok(message) => {
+                                    chat::add_info_msg(context, message.chat_id, err.to_string())
+                                        .await
+                                }
+                                Err(e) => error!(
+                                    context,
+                                    "couldn't load chat_id to inform user about SMTP error: {}", e
+                                ),
+                            };
+                            Status::Finished(Err(format_err!("SMTP Transient error failed too often: {}", err)))
+
+                        } else {
+                            Status::RetryLater
+                        }
                     }
                     _ => {
                         if smtp.has_maybe_stale_connection().await {
