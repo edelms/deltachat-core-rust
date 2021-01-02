@@ -252,7 +252,7 @@ impl Job {
             info!(context, "smtp-sending out mime message:");
             println!("{}", String::from_utf8_lossy(&message));
         }
-        match smtp.send(context, recipients, message, job_id).await {
+        let status = match smtp.send(context, recipients, message, job_id).await {
             Err(crate::smtp::send::Error::SendError(err)) => {
                 // Remote error, retry later.
                 warn!(context, "SMTP failed to send: {}", err);
@@ -289,18 +289,6 @@ impl Job {
                             // Yandex error "554 5.7.1 [2] Message rejected under suspicion of SPAM; https://ya.cc/..."
                             // should definitely go here, because user has to open the link to
                             // resume message sending.
-                            let msg_id = MsgId::new(self.foreign_id);
-                            message::set_msg_failed(context, msg_id, Some(err.to_string())).await;
-                            match Message::load_from_db(context, msg_id).await {
-                                Ok(message) => {
-                                    chat::add_info_msg(context, message.chat_id, err.to_string())
-                                        .await
-                                }
-                                Err(e) => error!(
-                                    context,
-                                    "couldn't load chat_id to inform user about SMTP error: {}", e
-                                ),
-                            };
                             Status::Finished(Err(format_err!("Permanent SMTP error: {}", err)))
                         }
                     }
@@ -316,18 +304,6 @@ impl Job {
                             // this job in three weeks, that doesn't make sense. Therefore
                             // render this message as failed and stop trying.
                             info!(context, "Smtp-job #{} failed for the {} time. Mark sending the message as failed.", self.job_id, self.tries);
-                            let msg_id = MsgId::new(self.foreign_id);
-                            message::set_msg_failed(context, msg_id, Some(err.to_string())).await;
-                            match Message::load_from_db(context, msg_id).await {
-                                Ok(message) => {
-                                    chat::add_info_msg(context, message.chat_id, err.to_string())
-                                        .await
-                                }
-                                Err(e) => error!(
-                                    context,
-                                    "couldn't load chat_id to inform user about SMTP error: {}", e
-                                ),
-                            };
                             Status::Finished(Err(format_err!(
                                 "SMTP Transient error failed too often: {}",
                                 err
@@ -367,7 +343,21 @@ impl Job {
                 job_try!(success_cb().await);
                 Status::Finished(Ok(()))
             }
+        };
+
+        if let Status::Finished(Err(err)) = &status {
+            // We couldn't send the message, so mark it as failed
+            let msg_id = MsgId::new(self.foreign_id);
+            message::set_msg_failed(context, msg_id, Some(err.to_string())).await;
+            match Message::load_from_db(context, msg_id).await {
+                Ok(message) => chat::add_info_msg(context, message.chat_id, err.to_string()).await,
+                Err(e) => error!(
+                    context,
+                    "couldn't load chat_id to inform user about SMTP error: {}", e
+                ),
+            };
         }
+        status
     }
 
     pub(crate) async fn send_msg_to_smtp(&mut self, context: &Context, smtp: &mut Smtp) -> Status {
