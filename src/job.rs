@@ -36,8 +36,13 @@ use crate::{config::Config, constants::Blocked};
 use crate::{constants::Chattype, contact::Contact};
 use crate::{scheduler::InterruptInfo, sql};
 
-// results in ~3 weeks for the last backoff timespan
-const JOB_RETRIES: u32 = 17;
+#[non_exhaustive]
+struct JobRetries;
+
+impl JobRetries {
+    pub const GENERAL: u32 = 17;
+    pub const SMTP_ERROR_TRANSIENT: u32 = 0;
+}
 
 /// Thread IDs
 #[derive(Debug, Display, Copy, Clone, PartialEq, Eq, FromPrimitive, ToPrimitive, FromSql, ToSql)]
@@ -298,7 +303,7 @@ impl Job {
 
                         // But let's first check if we didn't retry this job already
                         // too often.
-                        let actually_permanent = self.tries >= JOB_RETRIES - 1;
+                        let actually_permanent = self.tries >= JobRetries::SMTP_ERROR_TRANSIENT;
                         if actually_permanent {
                             // Okay we tried it already quite often. Next time we would schedule
                             // this job in three weeks, that doesn't make sense. Therefore
@@ -1090,7 +1095,7 @@ pub(crate) async fn perform_job(context: &Context, mut connection: Connection<'_
         Status::RetryNow | Status::RetryLater => {
             let tries = job.tries + 1;
 
-            if tries < JOB_RETRIES {
+            if tries < JobRetries::GENERAL {
                 info!(
                     context,
                     "{} thread increases job {} tries to {}", &connection, job, tries
@@ -1115,7 +1120,7 @@ pub(crate) async fn perform_job(context: &Context, mut connection: Connection<'_
                     "{} thread removes job {} as it exhausted {} retries",
                     &connection,
                     job,
-                    JOB_RETRIES
+                    JobRetries::GENERAL
                 );
                 job.delete(context).await.unwrap_or_else(|err| {
                     error!(context, "failed to delete job: {}", err);
