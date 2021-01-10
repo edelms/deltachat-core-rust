@@ -303,6 +303,7 @@ impl Job {
 
                         // But let's first check if we didn't retry this job already
                         // too often.
+                        #[allow(clippy::absurd_extreme_comparisons)]
                         let actually_permanent = self.tries >= JobRetries::SMTP_ERROR_TRANSIENT;
                         if actually_permanent {
                             // Okay we tried it already quite often. Next time we would schedule
