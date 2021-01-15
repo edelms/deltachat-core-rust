@@ -302,36 +302,28 @@ impl Job {
                         // We got a transient 4xx response from SMTP server.
                         // Give some time until the server-side error maybe goes away.
 
-                        // But let's first check if we didn't retry this job already
-                        // too often.
+                        // Sometimes we receive the 4.1.2 error, which stays for "Bad destination system address"
+                        // or more simple, the domain doesn't exist or is invalid. This should be a permanent error
+                        // and fail more early.
 
-                        let actually_permanent = {
-                            let response_code_bad_destination_system_address = response::Code::new(
-                                Severity::TransientNegativeCompletion,
-                                Category::Information,
-                                Detail::Two,
-                            );
-
-                            #[allow(clippy::absurd_extreme_comparisons)]
-                            if response.code == response_code_bad_destination_system_address {
-                                self.tries >= JobRetries::SMTP_ERROR_TRANSIENT_BAD_DESTINATION_SYSTEM_ADDRESS
-                            } else {
-                                false
-                            }
-                        };
-                        if actually_permanent {
-                            // Okay we tried it already quite often. Next time we would schedule
-                            // this job in three weeks, that doesn't make sense. Therefore
-                            // render this message as failed and stop trying.
+                        let response_code_bad_destination_system_address = response::Code::new(
+                            Severity::TransientNegativeCompletion,
+                            Category::Information,
+                            Detail::Two,
+                        );
+                        #[allow(clippy::absurd_extreme_comparisons)]
+                        if response.code == response_code_bad_destination_system_address
+                            && self.tries
+                                >= JobRetries::SMTP_ERROR_TRANSIENT_BAD_DESTINATION_SYSTEM_ADDRESS
+                        {
                             info!(context, "Smtp-job #{} failed for the {} time. Mark sending the message as failed.", self.job_id, self.tries);
-                            Status::Finished(Err(format_err!(
+                            return Status::Finished(Err(format_err!(
                                 "SMTP Transient error failed too often: {}, {:?}",
                                 response.code,
                                 response.message
-                            )))
-                        } else {
-                            Status::RetryLater
-                        }
+                            )));
+                        };
+                        Status::RetryLater
                     }
                     _ => {
                         if smtp.has_maybe_stale_connection().await {
