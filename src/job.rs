@@ -14,6 +14,7 @@ use anyhow::Context as _;
 use async_smtp::smtp::response::Category;
 use async_smtp::smtp::response::Code;
 use async_smtp::smtp::response::Detail;
+use async_smtp::smtp::response::{self, Category, Severity};
 
 use crate::context::Context;
 use crate::dc_tools::{dc_delete_file, dc_read_file, time};
@@ -41,7 +42,7 @@ struct JobRetries;
 
 impl JobRetries {
     pub const GENERAL: u32 = 17;
-    pub const SMTP_ERROR_TRANSIENT: u32 = 0;
+    pub const SMTP_ERROR_TRANSIENT_BAD_DESTINATION_SYSTEM_ADDRESS: u32 = 0;
 }
 
 /// Thread IDs
@@ -297,22 +298,36 @@ impl Job {
                             Status::Finished(Err(format_err!("Permanent SMTP error: {}", err)))
                         }
                     }
-                    async_smtp::smtp::error::Error::Transient(_) => {
+                    async_smtp::smtp::error::Error::Transient(response) => {
                         // We got a transient 4xx response from SMTP server.
                         // Give some time until the server-side error maybe goes away.
 
                         // But let's first check if we didn't retry this job already
                         // too often.
-                        #[allow(clippy::absurd_extreme_comparisons)]
-                        let actually_permanent = self.tries >= JobRetries::SMTP_ERROR_TRANSIENT;
+
+                        let actually_permanent = {
+                            let response_code_bad_destination_system_address = response::Code::new(
+                                Severity::TransientNegativeCompletion,
+                                Category::Information,
+                                Detail::Two,
+                            );
+
+                            #[allow(clippy::absurd_extreme_comparisons)]
+                            if response.code == response_code_bad_destination_system_address {
+                                self.tries >= JobRetries::SMTP_ERROR_TRANSIENT_BAD_DESTINATION_SYSTEM_ADDRESS
+                            } else {
+                                false
+                            }
+                        };
                         if actually_permanent {
                             // Okay we tried it already quite often. Next time we would schedule
                             // this job in three weeks, that doesn't make sense. Therefore
                             // render this message as failed and stop trying.
                             info!(context, "Smtp-job #{} failed for the {} time. Mark sending the message as failed.", self.job_id, self.tries);
                             Status::Finished(Err(format_err!(
-                                "SMTP Transient error failed too often: {}",
-                                err
+                                "SMTP Transient error failed too often: {}, {:?}",
+                                response.code,
+                                response.message
                             )))
                         } else {
                             Status::RetryLater
