@@ -11,7 +11,6 @@ use itertools::Itertools;
 use rand::{thread_rng, Rng};
 
 use anyhow::Context as _;
-use async_smtp::smtp::response::Category;
 use async_smtp::smtp::response::Code;
 use async_smtp::smtp::response::Detail;
 use async_smtp::smtp::response::{self, Category, Severity};
